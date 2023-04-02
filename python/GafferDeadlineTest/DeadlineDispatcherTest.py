@@ -39,10 +39,10 @@ import unittest
 from unittest import mock
 
 import IECore
-
-import IECore
+import IECoreScene
 
 import Gaffer
+import GafferScene
 import GafferTest
 import GafferDispatch
 import GafferDispatchTest
@@ -85,6 +85,11 @@ class DeadlineDispatcherTest(GafferTest.TestCase):
                     d.getUpstreamDeadlineTask().getEndFrame()
                 )
             )
+
+    def __parseDeadlineSettings(self, file):
+        with open(file) as inFile:
+            for i in inFile.readlines():
+                print(i)
 
     def testPreSpoolSignal(self):
         s = Gaffer.ScriptNode()
@@ -1085,6 +1090,36 @@ class DeadlineDispatcherTest(GafferTest.TestCase):
             return_value=("testID", "testMessage")
         ):
             self.assertRaises(RuntimeError, dispatcher.dispatch, [s["n2"]])
+
+    def testOutputs(self):
+        s = Gaffer.ScriptNode()
+
+        s["o"] = GafferScene.Outputs()
+        s["o"].addOutput("beauty", IECoreScene.Output("beauty.exr", "exr", "rgba"))
+        s["o"].addOutput(
+            "diffuse",
+            IECoreScene.Output("dummyDir/diffuse.exr", "exr", "color aov_diffuse")
+        )
+        s["o"].addOutput("frame", IECoreScene.Output("frame####.exr", "exr", "rgba"))
+
+        s["r"] = GafferScene.OpenGLRender()
+        s["r"]["in"].setInput(s["o"]["out"])
+
+        dispatcher = self.__dispatcher()
+        with mock.patch(
+            "GafferDeadline.DeadlineTools.submitJob",
+            return_value=("testID", "testMessage")
+        ):
+            dispatcher.dispatch([s["r"]])
+
+        settings = self.__parseDeadlineSettings(os.path.join(dispatcher.jobDirectory(), "r.job"))
+        self.assertIn("OutputFilename0", settings)
+        self.assertIn("OutputFilename1", settings)
+        self.assertIn("OutputFilename2", settings)
+
+        self.assertEqual(settings["OutputFilename0"], "beauty.exr")
+        self.assertEqual(settings["OutputFilename1"], "dummyDir/diffuse.exr")
+        self.assertEqual(settings["OutputFilename2"], "frame####.exr")
 
 
 if __name__ == "__main__":

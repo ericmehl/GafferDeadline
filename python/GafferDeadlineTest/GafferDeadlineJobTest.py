@@ -37,7 +37,10 @@
 import os
 import unittest
 
+import IECoreScene
+
 import Gaffer
+import GafferScene
 import GafferTest
 import GafferDeadline
 import GafferDispatch
@@ -134,6 +137,36 @@ class GafferDeadlineJobTest(GafferTest.TestCase):
         djp.setGafferNode(taskNode)
         self.assertEqual(djc.getParentJobByGafferNode(taskNode), djp)
         self.assertEqual(djc.getParentJobByGafferNode(taskNode2), None)
+
+    def testOutputs(self):
+        s = Gaffer.ScriptNode()
+        outputs = GafferScene.Outputs()
+        output1 = IECoreScene.Output("beauty.exr", "exr", "rgba")
+        output2 = IECoreScene.Output("${dir}/diffuse.exr", "exr", "color aov_diffuse")
+        output3 = IECoreScene.Output("frame####.exr", "exr", "rgba")
+        output2Resolved = IECoreScene.Output("dummyDir/diffuse.exr", "exr", "color aov_diffuse")
+        outputs.addOutput("beauty", output1)
+        outputs.addOutput("diffuse", output2)
+        outputs.addOutput("beauty2", output3)
+
+        renderTask = GafferScene.OpenGLRender()
+        renderTask["in"].setInput(outputs["out"])
+
+        context = Gaffer.Context()
+        context["dir"] = "dummyDir"
+        job = GafferDeadline.GafferDeadlineJob(renderTask, jobContext=context)
+
+        jobOutputs = job.outputs()
+
+        print(jobOutputs["beauty2"].getName())
+
+        self.assertEqual(len(jobOutputs), 3)
+        self.assertIn("beauty", jobOutputs)
+        self.assertIn("diffuse", jobOutputs)
+        self.assertIn("beauty2", jobOutputs)
+        self.assertEqual(jobOutputs["beauty"], output1)
+        self.assertEqual(jobOutputs["diffuse"], output2Resolved)
+        self.assertEqual(jobOutputs["beauty2"], output3)
 
 
 if __name__ == "__main__":

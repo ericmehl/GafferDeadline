@@ -41,6 +41,7 @@ import IECore
 
 import Gaffer
 import GafferDispatch
+import GafferScene
 
 from . import DeadlineTools
 from .GafferDeadlineTask import GafferDeadlineTask
@@ -282,6 +283,93 @@ class GafferDeadlineJob(object):
 
         return deps
 
+    # Returns a dictionary of the form `{outputName : IECoreScene.Output()}` representing
+    # the scene outputs for this job.
+    def outputs(self):
+        # Find the input `ScenePlug`, if any
+        node = self.getGafferNode()
+
+        IECore.msg(
+            IECore.Msg.Level.Debug,
+            "GafferDeadline.GafferDeadlineJob.outputs",
+            "Searching for \"ScenePlug\" connected to {} or upstream tasks...".format(
+                node.getName()
+            )
+        )
+
+        scenePlug = None
+        while node is not None and isinstance(node, GafferDispatch.TaskNode):
+            for plug in node.children():
+                if (
+                    isinstance(plug, GafferScene.ScenePlug) and
+                    plug.direction() == Gaffer.Plug.Direction.In
+                ):
+                    scenePlug = plug
+                    break
+
+            if len(node["preTasks"]) > 1:
+                IECore.msg(
+                    IECore.Msg.Level.Warning,
+                    "GafferDeadline",
+                    "Task node {} has multiple \"preTasks\" inputs. Only searching first input."
+                )
+            node = node["preTasks"][0]
+            IECore.msg(
+                IECore.Msg.Level.Debug,
+                "GafferDeadline.GafferDeadlineJob.outputs",
+                "{}...".format(node.getName())
+            )
+
+        if scenePlug is None:
+            IECore.msg(
+                IECore.Msg.Level.Debug,
+                "GafferDeadline.GafferDeadlineJob.outputs",
+                "No input scene plug found."
+            )
+            return {}
+
+        result = {}
+        IECore.msg(
+            IECore.Msg.Level.Debug,
+            "GafferDeadline.GafferDeadlineJob.outputs",
+            "Searching for outputs of {}.out".format(scenePlug.node().getName())
+        )
+        with Gaffer.Context(self.getContext()) as context:
+            framedOutputs = {}
+
+            globals = scenePlug["globals"].getValue()
+            for name, value in globals.items():
+                if name.startswith("output:"):
+                    IECore.msg(
+                        IECore.Msg.Level.Debug,
+                        "GafferDeadline.GafferDeadlineJob.outputs",
+                        "Found output \"{}\"".format(name[len("output:"):])
+                    )
+
+                    framedOutputs[name[len("output:"):]] = value
+
+            for name, value in framedOutputs.items():
+                framePaths = set()
+                for i in range(1, 10):
+                    context.setFrame(i)
+                    framePaths.add(scenePlug["globals"].getValue()["output:" + name].getName())
+                if len(framePaths) > 1:
+                    sequences = IECore.findSequences(list(framePaths))
+                    if len(sequences) != 1:
+                        IECore.msg(
+                            IECore.Msg.Level.Warning,
+                            "GafferDeadline.GafferDeadlineJob.outputs",
+                            "Failed to get frame padding from sequence {}".format(framePaths)
+                        )
+                    else:
+                        value.setName(sequences[0].fileName)
+                        result[name] = value
+                else:
+                    value.setName(next(iter(framePaths)))
+                    result[name] = value
+
+        return result
+
     @staticmethod
     def isControlTask(node):
         return type(node) in [
@@ -332,6 +420,13 @@ class GafferDeadlineJob(object):
                 )
             )
             environmentVariableCounter += 1
+
+        outputCounter = 0
+        for o in self.outputs():
+            jobLines.append(
+                "OutputFilename{}={}".format(outputCounter, o.getName())
+            )
+
         # Default to IECORE_LOG_LEVEL=INFO
         if "IECORE_LOG_LEVEL" not in self._environmentVariables:
             jobLines.append(
